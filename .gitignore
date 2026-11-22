@@ -1,0 +1,18 @@
+# Counter-Strike installation and redistributable game data are provided locally.
+/CS11/
+/assets.zip
+/valve.zip
+/pak0.pak
+/pak0_backup.pak
+
+# Local captures and generated output.
+/{B795F042-B10B-40AF-AF12-9503295277E6}.png
+/dist/
+/site/
+/.github/.cache/
+
+# Editor and operating-system files.
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/

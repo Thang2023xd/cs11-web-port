@@ -1,0 +1,2174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Counter-Strike 1.1 — WebAssembly</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
+    <style>
+        :root {
+            --cs-bg: #0b0c0d;
+            --cs-panel: #16181b;
+            --cs-accent: #e5a00d;
+            --cs-accent-hover: #ffb82e;
+            --cs-accent-dim: #795508;
+            --cs-text: #d8d8d8;
+            --cs-text-dim: #8b8f96;
+            --cs-border: #2c3036;
+            --cs-danger: #c0392b;
+            --font-tactical: "Courier New", Courier, monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        body, html {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background-color: var(--cs-bg);
+            font-family: Arial, Helvetica, sans-serif;
+            color: var(--cs-text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        @supports (height: 100dvh) {
+            body, html { height: 100dvh; }
+        }
+
+        #viewport-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            z-index: 1;
+        }
+
+        @supports (height: 100dvh) {
+            #viewport-container { height: 100dvh; }
+        }
+
+        #canvas {
+            display: block;
+            background: #000;
+            outline: none;
+            opacity: 0;
+            transition: opacity 0.4s ease-in;
+            touch-action: none;
+        }
+
+        #canvas.mode-fullscreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: none !important;
+            max-height: none !important;
+            border: none !important;
+            box-shadow: none !important;
+            border-radius: 0 !important;
+        }
+
+        #canvas.mode-windowed {
+            max-width: 96vw;
+            max-height: 94vh;
+            box-shadow: 0 0 45px rgba(0, 0, 0, 0.98), 0 0 12px rgba(229, 160, 13, 0.2);
+            border: 2px solid var(--cs-border);
+            border-radius: 4px;
+        }
+
+        #canvas.mode-fill {
+            width: 100vw !important;
+            height: 100vh !important;
+            border: none;
+        }
+
+        @supports (height: 100dvh) {
+            #canvas.mode-fullscreen, #canvas.mode-fill { height: 100dvh !important; }
+            #overlay { height: 100dvh; }
+        }
+
+        #overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: radial-gradient(circle at center, #1b1e23 0%, #090a0c 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            transition: opacity 0.4s ease-out;
+            padding: 20px;
+        }
+
+        .header-box {
+            text-align: center;
+            margin-bottom: 22px;
+        }
+
+        .title {
+            font-family: var(--font-tactical);
+            font-size: 2.7rem;
+            font-weight: 900;
+            letter-spacing: 4px;
+            color: var(--cs-accent);
+            text-shadow: 0 0 12px rgba(229, 160, 13, 0.4), 2px 2px 4px #000;
+        }
+
+        .subtitle {
+            font-size: 0.9rem;
+            letter-spacing: 2px;
+            color: var(--cs-text-dim);
+            text-transform: uppercase;
+            margin-top: 5px;
+        }
+
+        .terminal-card {
+            width: 100%;
+            max-width: 640px;
+            background: var(--cs-panel);
+            border: 1px solid var(--cs-border);
+            border-radius: 6px;
+            padding: 24px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
+        }
+
+        .progress-track {
+            width: 100%;
+            height: 20px;
+            background: #090a0c;
+            border: 1px solid var(--cs-border);
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 14px 0 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--cs-accent-dim), var(--cs-accent));
+            box-shadow: 0 0 8px rgba(229, 160, 13, 0.6);
+            transition: width 0.15s ease-out;
+        }
+
+        .progress-fill.error {
+            background: var(--cs-danger);
+            box-shadow: 0 0 8px rgba(192, 57, 43, 0.6);
+        }
+
+        .status-text {
+            font-family: var(--font-tactical);
+            font-size: 0.88rem;
+            color: var(--cs-text);
+            min-height: 44px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .status-text.error {
+            color: #ff6b6b;
+        }
+
+        .drop-zone {
+            display: none;
+            margin-top: 16px;
+            padding: 18px;
+            border: 2px dashed var(--cs-border);
+            border-radius: 4px;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.2);
+            cursor: pointer;
+            transition: border-color 0.2s, background-color 0.2s;
+        }
+
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--cs-accent);
+            background: rgba(229, 160, 13, 0.05);
+        }
+
+        .drop-zone-text {
+            font-size: 0.9rem;
+            color: var(--cs-text-dim);
+            margin-bottom: 10px;
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 16px;
+            padding-top: 14px;
+            border-top: 1px solid var(--cs-border);
+        }
+
+        .config-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .config-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--cs-text-dim);
+        }
+
+        .config-note {
+            color: var(--cs-text-dim);
+            font-size: 0.68rem;
+            line-height: 1.35;
+        }
+
+        .config-select, .config-input {
+            background: #090a0c;
+            border: 1px solid var(--cs-border);
+            color: #fff;
+            padding: 7px 10px;
+            border-radius: 3px;
+            font-size: 0.85rem;
+            outline: none;
+        }
+
+        .config-select:focus, .config-input:focus {
+            border-color: var(--cs-accent);
+        }
+
+        .actions {
+            display: none;
+            gap: 14px;
+            margin-top: 22px;
+            justify-content: center;
+        }
+
+        #skin-import-panel {
+            display: none;
+            margin-top: 12px;
+            text-align: center;
+        }
+        #skin-import-status {
+            display: block;
+            min-height: 1.4em;
+            margin-top: 6px;
+            color: var(--cs-text-dim);
+            font-size: 0.72rem;
+        }
+
+        .btn {
+            background: var(--cs-accent);
+            color: #000;
+            border: none;
+            padding: 12px 22px;
+            font-family: var(--font-tactical);
+            font-size: 0.92rem;
+            font-weight: bold;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            border-radius: 4px;
+            cursor: pointer;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+            transition: background 0.2s, transform 0.1s;
+        }
+
+        .btn:hover {
+            background: var(--cs-accent-hover);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn-secondary {
+            background: #2a2e35;
+            color: #e0e0e0;
+        }
+
+        .btn-secondary:hover {
+            background: #393e47;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .hud-hint {
+            margin-top: 18px;
+            font-size: 0.78rem;
+            color: var(--cs-text-dim);
+            text-align: center;
+            letter-spacing: 0.5px;
+        }
+        /* ================================================================
+         * Trainer Panel
+         * ================================================================ */
+        #trainer {
+            display: none;
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            width: 320px;
+            max-height: calc(100vh - 80px);
+            overflow-y: auto;
+            background: rgba(10, 11, 13, 0.97);
+            border: 1px solid #e5a00d;
+            border-radius: 6px;
+            box-shadow: 0 0 32px rgba(229, 160, 13, 0.25), 0 8px 40px rgba(0,0,0,0.9);
+            z-index: 999;
+            font-family: "Courier New", monospace;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #trainer.open { display: block; }
+
+        #bot-nav-notice {
+            position: fixed;
+            inset: 0;
+            z-index: 2000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.58);
+        }
+        #bot-nav-notice.open { display: flex; }
+        #bot-nav-dialog {
+            width: min(560px, calc(100vw - 32px));
+            padding: 16px;
+            border: 1px solid var(--cs-accent);
+            border-radius: 5px;
+            background: rgba(12, 13, 15, 0.97);
+            color: var(--cs-text);
+            font: 13px/1.45 "Courier New", monospace;
+            text-align: center;
+            box-shadow: 0 4px 22px rgba(0, 0, 0, 0.7);
+        }
+        .bot-nav-actions { display: flex; justify-content: center; gap: 10px; margin-top: 16px; }
+        .bot-nav-actions button {
+            min-height: 40px; padding: 8px 14px; border: 1px solid var(--cs-accent);
+            border-radius: 4px; background: #19150a; color: var(--cs-text);
+            font: bold 12px "Courier New", monospace; cursor: pointer;
+        }
+        .bot-nav-actions button:hover { background: #332500; }
+        .bot-nav-actions button:last-child { border-color: #777; }
+
+        .tr-titlebar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: linear-gradient(90deg, #1a1500, #2a2000);
+            border-bottom: 1px solid #e5a00d;
+            padding: 10px 14px;
+            cursor: move;
+            border-radius: 5px 5px 0 0;
+        }
+        .tr-title {
+            font-size: 0.9rem;
+            font-weight: bold;
+            letter-spacing: 2px;
+            color: #e5a00d;
+            text-transform: uppercase;
+        }
+        .tr-badge {
+            font-size: 0.65rem;
+            background: #e5a00d;
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+        .tr-hint {
+            font-size: 0.65rem;
+            color: #666;
+            text-align: center;
+            padding: 5px;
+            border-bottom: 1px solid #1e2024;
+        }
+        .tr-section {
+            padding: 10px 12px 4px;
+        }
+        .tr-section-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #e5a00d;
+            margin-bottom: 8px;
+            border-bottom: 1px solid #1e2024;
+            padding-bottom: 4px;
+        }
+        .tr-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .tr-grid.cols1 { grid-template-columns: 1fr; }
+        .tr-btn {
+            background: #16181b;
+            border: 1px solid #2c3036;
+            color: #c0c0c0;
+            padding: 7px 8px;
+            font-family: "Courier New", monospace;
+            font-size: 0.72rem;
+            text-align: left;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .tr-btn:hover { border-color: #e5a00d; color: #fff; background: #1f2126; }
+        .tr-btn.active { background: #1a1500; border-color: #e5a00d; color: #e5a00d; }
+        .tr-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .tr-btn:disabled:hover { border-color: var(--cs-border); color: var(--cs-text-dim); background: #101114; }
+        .tr-btn .tr-icon { font-size: 0.85rem; min-width: 16px; }
+        .tr-slider-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .tr-slider-label {
+            font-size: 0.68rem;
+            color: #8b8f96;
+            min-width: 80px;
+            white-space: nowrap;
+        }
+        input[type=range].tr-range {
+            flex: 1;
+            accent-color: #e5a00d;
+            height: 3px;
+            cursor: pointer;
+        }
+        .tr-val {
+            font-size: 0.68rem;
+            color: #e5a00d;
+            min-width: 36px;
+            text-align: right;
+        }
+        .tr-status {
+            font-size: 0.65rem;
+            color: #4a4;
+            padding: 6px 14px;
+            border-top: 1px solid #1e2024;
+            min-height: 24px;
+        }
+        .tr-status.err { color: #c44; }
+
+        /* Toggle hint badge */
+        #trainer-hint {
+            display: none;
+            position: fixed;
+            top: 10px;
+            right: 20px;
+            background: rgba(229,160,13,0.15);
+            border: 1px solid #e5a00d44;
+            color: #e5a00d;
+            font-family: "Courier New", monospace;
+            font-size: 0.7rem;
+            padding: 4px 10px;
+            border-radius: 3px;
+            z-index: 998;
+            pointer-events: none;
+        }
+        #trainer-hint.visible { display: block; }
+
+        #touch-controls {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 20;
+            pointer-events: none;
+            font-family: "Courier New", monospace;
+        }
+        #touch-controls.visible { display: block; }
+        .touch-trainer, .touch-stick, .touch-actions {
+            position: absolute;
+            pointer-events: auto;
+            touch-action: none;
+        }
+        .touch-trainer {
+            top: calc(env(safe-area-inset-top, 0px) + 12px);
+            left: calc(env(safe-area-inset-left, 0px) + 12px);
+            min-height: 42px;
+            padding: 8px 12px;
+            border: 1px solid #e5a00d;
+            border-radius: 4px;
+            background: rgba(10, 11, 13, 0.85);
+            color: #e5a00d;
+            font: bold 0.72rem "Courier New", monospace;
+        }
+        .touch-stick {
+            width: 124px;
+            height: 124px;
+            border: 2px solid rgba(229, 160, 13, 0.48);
+            border-radius: 50%;
+            background: rgba(10, 11, 13, 0.38);
+        }
+        #move-stick {
+            left: calc(env(safe-area-inset-left, 0px) + 16px);
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+        }
+        #look-stick {
+            top: calc(env(safe-area-inset-top, 0px) + 66px);
+            right: calc(env(safe-area-inset-right, 0px) + 16px);
+        }
+        .touch-stick-label {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 50%;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 0.58rem;
+            letter-spacing: 1px;
+            text-align: center;
+            transform: translateY(-50%);
+            pointer-events: none;
+        }
+        .touch-stick-knob {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 52px;
+            height: 52px;
+            border: 1px solid rgba(255, 184, 46, 0.9);
+            border-radius: 50%;
+            background: rgba(229, 160, 13, 0.42);
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        .touch-actions {
+            right: calc(env(safe-area-inset-right, 0px) + 14px);
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+            display: grid;
+            grid-template-columns: repeat(2, minmax(54px, 1fr));
+            gap: 7px;
+        }
+        .touch-action {
+            min-width: 56px;
+            min-height: 48px;
+            border: 1px solid rgba(229, 160, 13, 0.65);
+            border-radius: 4px;
+            background: rgba(10, 11, 13, 0.76);
+            color: #f0c05a;
+            font: bold 0.62rem "Courier New", monospace;
+            touch-action: none;
+        }
+        .touch-action:active { background: rgba(121, 85, 8, 0.92); }
+        #touch-status {
+            position: absolute;
+            top: calc(env(safe-area-inset-top, 0px) + 10px);
+            left: 50%;
+            padding: 5px 8px;
+            border-radius: 3px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #ffcf69;
+            font-size: 0.65rem;
+            transform: translateX(-50%);
+            pointer-events: none;
+        }
+        #touch-status:empty { display: none; }
+
+        @media (max-width: 700px) {
+            #overlay {
+                justify-content: flex-start;
+                overflow-y: auto;
+                overscroll-behavior: contain;
+                padding: calc(12px + env(safe-area-inset-top, 0px))
+                    calc(12px + env(safe-area-inset-right, 0px))
+                    calc(12px + env(safe-area-inset-bottom, 0px))
+                    calc(12px + env(safe-area-inset-left, 0px));
+            }
+            .header-box { margin-bottom: 14px; }
+            .title {
+                font-size: clamp(1.35rem, 7vw, 2.1rem);
+                letter-spacing: 1.5px;
+            }
+            .subtitle { font-size: 0.68rem; letter-spacing: 1px; }
+            .terminal-card { padding: 16px; }
+            .config-grid { grid-template-columns: 1fr; gap: 12px; }
+            .config-item[style*="grid-column"] { grid-column: 1 / -1 !important; }
+            .actions { width: 100%; flex-direction: column; gap: 10px; }
+            .actions .btn { width: 100%; min-height: 48px; }
+            .hud-hint { margin-bottom: 10px; }
+            #trainer {
+                top: calc(env(safe-area-inset-top, 0px) + 54px);
+                right: calc(env(safe-area-inset-right, 0px) + 8px);
+                width: min(360px, calc(100vw - 16px));
+                max-height: calc(100dvh - 64px - env(safe-area-inset-bottom, 0px));
+            }
+            .tr-btn { min-height: 42px; }
+        }
+
+        @media (max-height: 520px) {
+            #overlay { justify-content: flex-start; overflow-y: auto; }
+            .header-box { margin-bottom: 8px; }
+            .title { font-size: clamp(1.2rem, 5vw, 1.8rem); }
+            .terminal-card { padding: 12px; }
+            .config-grid { margin-top: 10px; padding-top: 10px; }
+        }
+
+    </style>
+</head>
+<body>
+    <div id="viewport-container">
+        <canvas id="canvas" tabindex="-1"></canvas>
+    </div>
+    <div id="bot-nav-notice" role="dialog" aria-modal="true" aria-labelledby="bot-nav-message">
+        <div id="bot-nav-dialog">
+            <div id="bot-nav-message"></div>
+            <div class="bot-nav-actions">
+                <button type="button" id="bot-nav-continue">Analyze map and play with bots</button>
+                <button type="button" id="bot-nav-skip">Play without bots</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trainer / Cheat Panel — toggle with F1 key in-game -->
+    <div id="trainer-hint">[ F1 ] TRAINER</div>
+
+    <div id="trainer">
+        <div class="tr-titlebar" id="tr-drag">
+            <span class="tr-title">⚡ CS 1.1 Trainer</span>
+            <span class="tr-badge">F1</span>
+        </div>
+        <div class="tr-hint">Press F1 in-game to toggle &nbsp;·&nbsp; sv_cheats enabled on use</div>
+
+        <div class="tr-section">
+            <div class="tr-section-label">Player</div>
+            <div class="tr-grid">
+                <button class="tr-btn" data-cheat="god" data-toggle="god;god">
+                    <span class="tr-icon">🛡</span> God Mode
+                </button>
+                <button class="tr-btn" data-cheat="noclip" data-toggle="impulse 200;impulse 200">
+                    <span class="tr-icon">👻</span> No Clip
+                </button>
+                <button class="tr-btn" data-cheat="armor" data-cmd="give item_assaultsuit">
+                    <span class="tr-icon">🦺</span> Full Armor
+                </button>
+            </div>
+        </div>
+
+        <div class="tr-section">
+            <div class="tr-section-label">Combat</div>
+            <div class="tr-grid">
+                <button class="tr-btn" data-cheat="weapons" data-cmd="impulse 255">
+                    <span class="tr-icon">🔫</span> All Weapons
+                </button>
+                <button class="tr-btn" data-cheat="ammo" data-toggle="mp_infinite_ammo 1;mp_infinite_ammo 0">
+                    <span class="tr-icon">🎯</span> Inf. Ammo
+                </button>
+                <button class="tr-btn" type="button" disabled title="The current ReGameDLL build disables auto-aim target correction.">
+                    <span class="tr-icon">🎯</span> Auto-Aim Unavailable
+                </button>
+                <button class="tr-btn" data-cheat="trace" data-toggle="sv_clienttrace 9999;sv_clienttrace 1">
+                    <span class="tr-icon">📍</span> Wide Hitbox Trace
+                </button>
+            </div>
+        </div>
+
+        <div class="tr-section">
+            <div class="tr-section-label">Movement</div>
+            <div class="tr-slider-row">
+                <span class="tr-slider-label">Speed</span>
+                <input type="range" class="tr-range" id="sl-speed" min="100" max="2000" step="50" value="320">
+                <span class="tr-val" id="sv-speed">320</span>
+            </div>
+            <div class="tr-slider-row">
+                <span class="tr-slider-label">Gravity</span>
+                <input type="range" class="tr-range" id="sl-grav" min="10" max="2000" step="10" value="800">
+                <span class="tr-val" id="sv-grav">800</span>
+            </div>
+            <div class="tr-grid">
+                <button class="tr-btn" data-cheat="lowgrav" data-cmd="sv_gravity 100">
+                    <span class="tr-icon">🚀</span> Low Gravity
+                </button>
+                <button class="tr-btn" data-cheat="normgrav" data-cmd="sv_gravity 800">
+                    <span class="tr-icon">⬇</span> Normal Grav.
+                </button>
+            </div>
+        </div>
+
+        <div class="tr-section">
+            <div class="tr-section-label">Bots</div>
+            <div class="tr-grid">
+                <button class="tr-btn" data-cheat="botstop" data-toggle="bot_stop 1;bot_stop 0">
+                    <span class="tr-icon">🤖</span> Freeze Bots
+                </button>
+                <button class="tr-btn" data-cheat="botkill" data-cmd="bot_kill">
+                    <span class="tr-icon">💀</span> Kill Bots
+                </button>
+                <button class="tr-btn" data-cheat="botadd" data-cmd="bot_add">
+                    <span class="tr-icon">➕</span> Add Bot
+                </button>
+                <button class="tr-btn" data-cheat="botkick" data-cmd="bot_kick all">
+                    <span class="tr-icon">🚫</span> Kick All Bots
+                </button>
+            </div>
+        </div>
+
+        <div class="tr-section">
+            <div class="tr-section-label">Visuals</div>
+            <div class="tr-grid">
+                <button class="tr-btn" data-cheat="fullbright" data-toggle="r_fullbright 1;r_fullbright 0">
+                    <span class="tr-icon">☀</span> Fullbright
+                </button>
+                <button class="tr-btn" data-cheat="wire" data-toggle="gl_wireframe 2;gl_wireframe 0">
+                    <span class="tr-icon">🕸</span> Wireframe
+                </button>
+                <button class="tr-btn" data-cheat="thirdp" data-toggle="thirdperson;firstperson">
+                    <span class="tr-icon">📷</span> Third Person
+                </button>
+                <button class="tr-btn" data-cheat="showfps" data-toggle="cl_showfps 1;cl_showfps 0">
+                    <span class="tr-icon">📊</span> Show FPS
+                </button>
+            </div>
+        </div>
+
+        <div class="tr-section">
+            <div class="tr-section-label">Server</div>
+            <div class="tr-grid cols1">
+                <button class="tr-btn" data-cheat="restart" data-cmd="sv_restart 1">
+                    <span class="tr-icon">🔄</span> Restart Round
+                </button>
+                <button type="button" class="tr-btn" data-action="return-launcher">
+                    <span class="tr-icon">&#8617;</span> Change Map / Return to Launcher
+                </button>
+            </div>
+        </div>
+
+        <div class="tr-status" id="tr-status">Ready — click any cheat</div>
+    </div>
+
+    <div id="touch-controls" aria-label="Touch controls">
+        <button type="button" class="touch-trainer" id="touch-trainer">CHEATS</button>
+        <div class="touch-stick" id="move-stick" role="application" aria-label="Movement control">
+            <span class="touch-stick-label">MOVE</span>
+            <span class="touch-stick-knob"></span>
+        </div>
+        <div class="touch-stick" id="look-stick" role="application" aria-label="Look control">
+            <span class="touch-stick-label">LOOK</span>
+            <span class="touch-stick-knob"></span>
+        </div>
+        <div class="touch-actions" aria-label="Game actions">
+            <button type="button" class="touch-action" data-touch-hold="attack">FIRE</button>
+            <button type="button" class="touch-action" data-touch-hold="jump">JUMP</button>
+            <button type="button" class="touch-action" data-touch-hold="duck">DUCK</button>
+            <button type="button" class="touch-action" data-touch-hold="use">USE</button>
+            <button type="button" class="touch-action" data-touch-hold="reload">RELOAD</button>
+            <button type="button" class="touch-action" data-touch-command="lastinv">LAST</button>
+        </div>
+        <span id="touch-status" role="status" aria-live="polite"></span>
+    </div>
+
+    <div id="overlay">
+        <div class="header-box">
+            <h1 class="title">COUNTER-STRIKE 1.1</h1>
+            <p class="subtitle">GoldSrc WebAssembly Engine Runtime</p>
+        </div>
+
+        <div class="terminal-card">
+            <div class="status-text" id="status">Initializing WebAssembly subsystem...</div>
+            <div class="progress-track">
+                <div class="progress-fill" id="progress"></div>
+            </div>
+
+            <div class="drop-zone" id="drop-zone">
+                <p class="drop-zone-text">valve.zip not detected on web server.</p>
+                <button type="button" class="btn btn-secondary" id="btn-browse" style="padding: 6px 14px; font-size: 0.8rem;">Select valve.zip from disk</button>
+                <input type="file" id="file-input" accept=".zip" class="hidden">
+            </div>
+
+            <div id="skin-import-panel">
+                <button type="button" class="btn btn-secondary" id="btn-import-skin" style="padding: 8px 14px; font-size: 0.78rem;">Import Skin Mod (.zip)</button>
+                <input type="file" id="skin-file-input" accept=".zip" class="hidden">
+                <small id="skin-import-status">ZIP should contain cstrike/models/... or models/... files.</small>
+            </div>
+
+            <div class="config-grid" id="config-panel">
+                <div class="config-item">
+                    <label class="config-label" for="cfg-map">Map Selection</label>
+                    <select class="config-select" id="cfg-map">
+                        <option value="de_dust2" selected>de_dust2</option>
+                        <option value="cs_assault">cs_assault</option>
+                        <option value="cs_italy">cs_italy</option>
+                        <option value="cs_office">cs_office</option>
+                        <option value="cs_747">cs_747</option>
+                        <option value="cs_militia">cs_militia</option>
+                        <option value="cs_siege">cs_siege</option>
+                        <option value="cs_estate">cs_estate</option>
+                        <option value="cs_backalley">cs_backalley</option>
+                        <option value="cs_arabstreets">cs_arabstreets</option>
+                        <option value="cs_thunder">cs_thunder</option>
+                        <option value="de_aztec">de_aztec</option>
+                        <option value="de_cbble">de_cbble</option>
+                        <option value="de_dust">de_dust</option>
+                        <option value="de_inferno">de_inferno</option>
+                        <option value="de_nuke">de_nuke</option>
+                        <option value="de_prodigy">de_prodigy</option>
+                        <option value="de_train">de_train</option>
+                        <option value="de_vegas">de_vegas</option>
+                        <option value="de_vertigo">de_vertigo</option>
+                        <option value="de_rotterdam">de_rotterdam</option>
+                        <option value="de_foption">de_foption</option>
+                        <option value="as_oilrig">as_oilrig</option>
+                        <option value="as_highrise">as_highrise</option>
+                        <option value="as_tundra">as_tundra</option>
+                        <option value="_menu">CS 1.1 Main Menu Only</option>
+                    </select>
+                </div>
+                <div class="config-item">
+                    <label class="config-label" for="cfg-res">Windowed Resolution</label>
+                    <select class="config-select" id="cfg-res">
+                        <option value="1024x768" selected>1024 x 768 (Standard XGA)</option>
+                        <option value="800x600">800 x 600 (Classic SVGA)</option>
+                        <option value="1280x720">1280 x 720 (16:9 Widescreen)</option>
+                        <option value="fill">Fill Browser Window</option>
+                    </select>
+                </div>
+                <div class="config-item">
+                    <label class="config-label" for="cfg-bots">CS Bot Quota</label>
+                    <select class="config-select" id="cfg-bots">
+                        <option value="0">0 (Solo / Practice)</option>
+                        <option value="3">3 Bots (2v2)</option>
+                        <option value="5">5 Bots (3v3)</option>
+                        <option value="7" selected>7 Bots (4v4)</option>
+                        <option value="10">10 Bots</option>
+                        <option value="15">15 Bots</option>
+                        <option value="20">20 Bots</option>
+                        <option value="25">25 Bots</option>
+                        <option value="30">30 Bots (32-slot limit)</option>
+                    </select>
+                    <small class="config-note">Up to 30 bots in a 32-slot game. Maps without navigation ask before analysis.</small>
+                </div>
+                <div class="config-item">
+                    <label class="config-label" for="cfg-diff">Bot Difficulty</label>
+                    <select class="config-select" id="cfg-diff">
+                        <option value="0">Easy</option>
+                        <option value="1" selected>Normal</option>
+                        <option value="2">Hard</option>
+                        <option value="3">Expert</option>
+                    </select>
+                </div>
+                <div class="config-item" style="grid-column: span 2;">
+                    <label class="config-label" for="cfg-nick">Player Nickname</label>
+                    <input class="config-input" type="text" id="cfg-nick" value="Player" maxlength="24">
+                </div>
+            </div>
+
+            <div class="actions" id="actions">
+                <button type="button" class="btn" id="btn-fullscreen">▶ Launch Fullscreen</button>
+                <button type="button" class="btn btn-secondary" id="btn-windowed">▶ Launch Windowed</button>
+            </div>
+        </div>
+
+        <div class="hud-hint">
+            Tip: Press <code>~</code> for console, <code>Esc</code> to release mouse.
+        </div>
+    </div>
+
+    <script>
+    (() => {
+        'use strict';
+
+        /* ==================================================================
+         * Named Configuration & Holes
+         * ================================================================== */
+        const ASSET_REVISION = '20261121-bot-profiles-v1';
+        const CONFIG = {
+            ENGINE_VERSION: '0.0.4',
+            CLIENT_VERSION: '0.0.2',
+            JSZIP_VERSION:  '3.10.1',
+
+            CDN_BASE:       'https://cdn.jsdelivr.net/npm',
+            // Split asset loading: pak0.pak served raw, cstrike+loose valve files in assets.zip
+            ASSETS_ZIP_URL: `./assets.zip?v=${ASSET_REVISION}`,
+            PAK0_URL:       `./pak0.pak?v=${ASSET_REVISION}`,
+            // Legacy fallback if split files aren't present
+            ASSET_ZIP_URL:  `./valve.zip?v=${ASSET_REVISION}`,
+            MOUNT_POINT:    '/rodir',
+            WRITE_MOUNT_POINT: '/rwdir',
+
+            GAME_NAME:      'cstrike',
+            BASE_GAME:      'valve',
+
+            INITIAL_MEMORY: 67108864,
+            MAXIMUM_MEMORY: 2147483648,
+            ZIP_WORKERS:    8,
+            BOOT_MAP_DELAY_MS: 1000,
+
+            NET_WS_PROXY_URL: '',
+            NET_RTC_SIGNAL_URL: '',
+            NET_DEDICATED_ADDR: ''
+        };
+
+        const query = new URLSearchParams(window.location.search);
+        const ENGINE_VER = query.get('engine') || CONFIG.ENGINE_VERSION;
+        const CLIENT_VER = query.get('client') || CONFIG.CLIENT_VERSION;
+
+        const ENGINE_DIST = `${CONFIG.CDN_BASE}/xash3d-fwgs@${ENGINE_VER}/dist`;
+        const CLIENT_DIST = `${CONFIG.CDN_BASE}/cs16-client@${CLIENT_VER}/dist`;
+        const RAW_JS_URL  = `${ENGINE_DIST}/raw.js`;
+        const JSZIP_URL   = `${CONFIG.CDN_BASE}/jszip@${CONFIG.JSZIP_VERSION}/dist/jszip.min.js`;
+
+        const WASM_LOOKUP = {
+            'xash.wasm':                             `${ENGINE_DIST}/xash.wasm`,
+            'filesystem_stdio.wasm':                 `${ENGINE_DIST}/filesystem_stdio.wasm`,
+            '/rodir/filesystem_stdio.so':            `${ENGINE_DIST}/filesystem_stdio.wasm`,
+            '/rwdir/filesystem_stdio.so':            `${ENGINE_DIST}/filesystem_stdio.wasm`,
+            'libref_gles3compat.wasm':               `${ENGINE_DIST}/libref_gles3compat.wasm`,
+            'cl_dlls/menu_emscripten_wasm32.wasm':   `${CLIENT_DIST}/cl_dll/menu_emscripten_wasm32.wasm`,
+            'cl_dlls/client_emscripten_wasm32.wasm': `${CLIENT_DIST}/cl_dll/client_emscripten_wasm32.wasm`,
+            'dlls/cs_emscripten_wasm32.so':          `${CLIENT_DIST}/dlls/cs_emscripten_wasm32.so`
+        };
+
+        const DYNAMIC_LIBS = [
+            'filesystem_stdio.wasm',
+            'libref_gles3compat.wasm',
+            'cl_dlls/menu_emscripten_wasm32.wasm',
+            'dlls/cs_emscripten_wasm32.so',
+            'cl_dlls/client_emscripten_wasm32.wasm',
+            '/rwdir/filesystem_stdio.so'
+        ];
+
+        const NAV_CACHE_DB = 'cs11port-bot-navigation';
+        const NAV_CACHE_STORE = 'maps';
+        const SKIN_CACHE_DB = 'cs11port-skin-mods';
+        const SKIN_CACHE_STORE = 'files';
+
+        function openSkinModCache() {
+            if (!window.indexedDB) return Promise.reject(new Error('IndexedDB is unavailable.'));
+            return new Promise((resolve, reject) => {
+                const request = window.indexedDB.open(SKIN_CACHE_DB, 1);
+                request.onupgradeneeded = () => request.result.createObjectStore(SKIN_CACHE_STORE);
+                request.onsuccess = () => {
+                    request.result.onversionchange = () => request.result.close();
+                    resolve(request.result);
+                };
+                request.onerror = () => reject(request.error || new Error('Could not open skin mod storage.'));
+            });
+        }
+
+        async function readSavedSkinMods() {
+            const db = await openSkinModCache();
+            try {
+                return await new Promise((resolve, reject) => {
+                    const tx = db.transaction(SKIN_CACHE_STORE, 'readonly');
+                    const store = tx.objectStore(SKIN_CACHE_STORE);
+                    const keysRequest = store.getAllKeys();
+                    const valuesRequest = store.getAll();
+                    tx.oncomplete = () => resolve(new Map(keysRequest.result.map((key, index) => [key, valuesRequest.result[index]])));
+                    tx.onerror = () => reject(tx.error || new Error('Could not read saved skin mods.'));
+                });
+            } finally {
+                db.close();
+            }
+        }
+
+        async function saveSkinMods(files) {
+            const db = await openSkinModCache();
+            try {
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction(SKIN_CACHE_STORE, 'readwrite');
+                    const store = tx.objectStore(SKIN_CACHE_STORE);
+                    for (const [path, data] of files) store.put(data, path);
+                    tx.oncomplete = resolve;
+                    tx.onerror = () => reject(tx.error || new Error('Could not save skin mods.'));
+                    tx.onabort = () => reject(tx.error || new Error('Skin mod save was cancelled.'));
+                });
+            } finally {
+                db.close();
+            }
+        }
+
+        function openNavigationCache() {
+            if (!window.indexedDB) {
+                return Promise.reject(new Error('IndexedDB is unavailable.'));
+            }
+            return new Promise((resolve, reject) => {
+                const request = window.indexedDB.open(NAV_CACHE_DB, 1);
+                request.onupgradeneeded = () => {
+                    request.result.createObjectStore(NAV_CACHE_STORE);
+                };
+                request.onsuccess = () => {
+                    request.result.onversionchange = () => request.result.close();
+                    resolve(request.result);
+                };
+                request.onerror = () => reject(request.error || new Error('Could not open bot navigation cache.'));
+                request.onblocked = () => reject(new Error('Bot navigation cache upgrade is blocked by another page.'));
+            });
+        }
+
+        function readNavigationCache(db, key) {
+            return new Promise((resolve, reject) => {
+                const request = db.transaction(NAV_CACHE_STORE, 'readonly').objectStore(NAV_CACHE_STORE).get(key);
+                request.onsuccess = () => {
+                    const value = request.result;
+                    resolve(value instanceof ArrayBuffer ? new Uint8Array(value) : null);
+                };
+                request.onerror = () => reject(request.error || new Error('Could not read bot navigation cache.'));
+            });
+        }
+
+        /* ==================================================================
+         * UI Elements
+         * ================================================================== */
+        const overlay        = document.getElementById('overlay');
+        const canvas         = document.getElementById('canvas');
+        const statusEl       = document.getElementById('status');
+        const progressEl     = document.getElementById('progress');
+        const dropZone       = document.getElementById('drop-zone');
+        const fileInput      = document.getElementById('file-input');
+        const btnBrowse      = document.getElementById('btn-browse');
+        const skinImportPanel = document.getElementById('skin-import-panel');
+        const skinImportButton = document.getElementById('btn-import-skin');
+        const skinFileInput = document.getElementById('skin-file-input');
+        const skinImportStatus = document.getElementById('skin-import-status');
+        const actions        = document.getElementById('actions');
+        const btnFullscreen  = document.getElementById('btn-fullscreen');
+        const btnWindowed    = document.getElementById('btn-windowed');
+        const cfgMap         = document.getElementById('cfg-map');
+        const cfgRes         = document.getElementById('cfg-res');
+        const cfgBots        = document.getElementById('cfg-bots');
+        const cfgNick        = document.getElementById('cfg-nick');
+        const cfgDiff        = document.getElementById('cfg-diff');
+        const touchControls  = document.getElementById('touch-controls');
+        const botNavNotice   = document.getElementById('bot-nav-notice');
+
+        let loadedVfsMap     = null;
+        let isEngineLaunched = false;
+        function askToAnalyzeNavigation(mapName) {
+            document.getElementById('bot-nav-message').textContent =
+                `This map has not been analyzed for bots yet. Analyzing it may take a while and temporarily slow the game. Do you want to continue and play with bots on ${mapName}?`;
+            botNavNotice.classList.add('open');
+            return new Promise((resolve) => {
+                const continueButton = document.getElementById('bot-nav-continue');
+                const skipButton = document.getElementById('bot-nav-skip');
+                const finish = (accepted) => {
+                    botNavNotice.classList.remove('open');
+                    continueButton.removeEventListener('click', onContinue);
+                    skipButton.removeEventListener('click', onSkip);
+                    resolve(accepted);
+                };
+                const onContinue = () => finish(true);
+                const onSkip = () => finish(false);
+                continueButton.addEventListener('click', onContinue, { once: true });
+                skipButton.addEventListener('click', onSkip, { once: true });
+            });
+        }
+
+        const setStatus = (msg) => { statusEl.textContent = msg; };
+        const setProgress = (pct) => {
+            progressEl.style.width = Math.max(0, Math.min(100, pct)) + '%';
+        };
+
+        const fatal = (err) => {
+            console.error('CS 1.1 Web Error:', err);
+            statusEl.classList.add('error');
+            progressEl.classList.add('error');
+            setProgress(100);
+            setStatus((err && err.message ? err.message : String(err)) + '\nCheck developer console for trace.');
+            actions.style.display = 'none';
+            overlay.style.opacity = '1';
+            overlay.style.pointerEvents = 'auto';
+            canvas.style.opacity = '0';
+        };
+
+        async function extractSkinMod(file) {
+            if (file.size > 200 * 1024 * 1024) {
+                throw new Error('Skin mod ZIP is larger than the 200 MB limit.');
+            }
+            const zip = await JSZip.loadAsync(file);
+            const files = new Map();
+            const entries = [];
+            zip.forEach((rawPath, entry) => {
+                if (!entry.dir) entries.push([rawPath, entry]);
+            });
+
+            for (const [rawPath, entry] of entries) {
+                const parts = rawPath.replace(/\\/g, '/').split('/').filter((part) => part && part !== '.');
+                if (parts.includes('..')) throw new Error(`Unsafe path in skin mod: ${rawPath}`);
+                const lower = parts.map((part) => part.toLowerCase());
+                const modelIndex = lower.lastIndexOf('models');
+                const spriteIndex = lower.lastIndexOf('sprites');
+                const assetIndex = Math.max(modelIndex, spriteIndex);
+                if (assetIndex < 0 || assetIndex >= parts.length - 1) continue;
+                const relativePath = parts.slice(assetIndex).join('/');
+                if (!/\.(mdl|bmp|tga|spr)$/i.test(relativePath)) continue;
+                const target = `cstrike/${relativePath}`;
+                files.set(target, await entry.async('uint8array'));
+            }
+
+            if (files.size === 0) {
+                throw new Error('No GoldSrc model or sprite files found. ZIP needs models/... or sprites/... files.');
+            }
+            return files;
+        }
+
+        const loadScript = (src) => new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = src;
+            s.async = true;
+            s.onload = () => resolve();
+            s.onerror = () => reject(new Error(`Failed to load external runtime script: ${src}`));
+            document.head.appendChild(s);
+        });
+
+        async function preflightBinaries(urls) {
+            const checks = await Promise.all(urls.map(async (u) => {
+                try {
+                    const r = await fetch(u, { method: 'HEAD' });
+                    return r.ok ? null : `${r.status} ${u}`;
+                } catch {
+                    return null;
+                }
+            }));
+            const failures = checks.filter(Boolean);
+            if (failures.length) {
+                throw new Error('Upstream CDN modules unreachable:\n' + failures.join('\n'));
+            }
+        }
+
+        async function fetchZipBuffer(url) {
+            const res = await fetch(url, { cache: 'no-cache' });
+            if (!res.ok) {
+                throw new Error(String(res.status));
+            }
+            const len = Number(res.headers.get('Content-Length')) || 0;
+            if (!res.body || !res.body.getReader) {
+                return res.arrayBuffer();
+            }
+            const reader = res.body.getReader();
+            const chunks = [];
+            let loaded = 0;
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                loaded += value.length;
+                if (len > 0) {
+                    setProgress((loaded / len) * 100);
+                    setStatus(`Streaming CS 1.1 assets: ${(loaded / 1048576).toFixed(1)} / ${(len / 1048576).toFixed(1)} MB`);
+                } else {
+                    setStatus(`Streaming CS 1.1 assets: ${(loaded / 1048576).toFixed(1)} MB`);
+                }
+            }
+            const combined = new Uint8Array(loaded);
+            let offset = 0;
+            for (const c of chunks) {
+                combined.set(c, offset);
+                offset += c.length;
+            }
+            return combined.buffer;
+        }
+
+        const sanitizePath = (p) => p.replace(/\\/g, '/').replace(/^\.?\/+/, '');
+
+        async function unpackAssets(arrayBuf) {
+            let zip;
+            try {
+                zip = await JSZip.loadAsync(arrayBuf);
+            } catch {
+                throw new Error('Provided archive is corrupted or not a valid ZIP file.');
+            }
+
+            const entries = [];
+            zip.forEach((path, entry) => {
+                if (entry.dir) return;
+                const clean = sanitizePath(path);
+                if (clean.startsWith('__MACOSX/') || clean.endsWith('.DS_Store')) return;
+                entries.push(path);
+            });
+
+            const roots = new Set(entries.map(e => sanitizePath(e).split('/')[0].toLowerCase()));
+            if (!roots.has('valve') || !roots.has('cstrike')) {
+                throw new Error(`Archive must contain 'valve' and 'cstrike' at root level. Found: ${Array.from(roots).join(', ') || 'none'}`);
+            }
+
+            const vfsMap = new Map();
+            let processed = 0;
+            let cursor = 0;
+
+            const extractWorker = async () => {
+                while (cursor < entries.length) {
+                    const rawName = entries[cursor++];
+                    const data = await zip.file(rawName).async('uint8array');
+                    vfsMap.set(sanitizePath(rawName), data);
+                    processed++;
+                    if (processed % 30 === 0 || processed === entries.length) {
+                        setProgress((processed / entries.length) * 100);
+                        setStatus(`Decompressing game files (${processed}/${entries.length})...`);
+                    }
+                }
+            };
+
+            await Promise.all(Array.from({ length: CONFIG.ZIP_WORKERS }, () => extractWorker()));
+            return vfsMap;
+        }
+
+        function validateGameAssets(vfsMap) {
+            const shieldModel = vfsMap.get('cstrike/models/shield/p_shield_deagle.mdl');
+            if (!shieldModel || !shieldModel.length) {
+                throw new Error('Asset archive is missing cstrike/models/shield/p_shield_deagle.mdl.');
+            }
+
+            const pak = vfsMap.get('valve/pak0.pak');
+            if (!pak || pak.length < 12) {
+                throw new Error('Asset archive is missing the complete valve/pak0.pak.');
+            }
+
+            const header = new DataView(pak.buffer, pak.byteOffset, pak.byteLength);
+            if (header.getUint8(0) !== 0x50 || header.getUint8(1) !== 0x41 ||
+                header.getUint8(2) !== 0x43 || header.getUint8(3) !== 0x4b) {
+                throw new Error('valve/pak0.pak has an invalid PACK signature.');
+            }
+
+            const directoryOffset = header.getUint32(4, true);
+            const directorySize = header.getUint32(8, true);
+            if (directorySize % 64 !== 0 || directoryOffset > pak.length ||
+                directorySize > pak.length - directoryOffset) {
+                throw new Error('valve/pak0.pak has an invalid or truncated directory.');
+            }
+
+            let hasPickupSound = false;
+            const decoder = new TextDecoder();
+            for (let offset = directoryOffset; offset < directoryOffset + directorySize; offset += 64) {
+                const nameBytes = pak.subarray(offset, offset + 56);
+                const nul = nameBytes.indexOf(0);
+                const name = decoder.decode(nul < 0 ? nameBytes : nameBytes.subarray(0, nul));
+                if (name.toLowerCase() === 'sound/items/gunpickup2.wav') {
+                    hasPickupSound = true;
+                    break;
+                }
+            }
+            if (!hasPickupSound && !vfsMap.has('valve/sound/items/gunpickup2.wav')) {
+                throw new Error('valve/pak0.pak is missing precached sound/items/gunpickup2.wav.');
+            }
+        }
+
+        function generateScopeArcTGA(quadrant) {
+            const width = 256, height = 256;
+            const buf = new ArrayBuffer(18 + width * height * 4);
+            const view = new DataView(buf);
+            const pixels = new Uint8Array(buf, 18);
+
+            view.setUint8(2, 2);
+            view.setUint16(12, width, true);
+            view.setUint16(14, height, true);
+            view.setUint8(16, 32);
+            view.setUint8(17, 8);
+
+            let cx = 0, cy = 0;
+            if (quadrant === 'nw') { cx = 256; cy = 0; }
+            else if (quadrant === 'ne') { cx = 0; cy = 0; }
+            else if (quadrant === 'se') { cx = 0; cy = 256; }
+            else if (quadrant === 'sw') { cx = 256; cy = 256; }
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const d = Math.hypot(x - cx, y - cy);
+                    const idx = (y * width + x) * 4;
+                    if (d > 256) {
+                        pixels[idx + 3] = 255;
+                    } else if (d > 254) {
+                        pixels[idx + 3] = Math.round((d - 254) / 2 * 255);
+                    }
+                }
+            }
+            return new Uint8Array(buf);
+        }
+
+        function executeEngineCommand(mod, cmd) {
+            if (!mod || typeof mod.ccall !== 'function') return false;
+            try {
+                mod.ccall('Cmd_ExecuteString', null, ['string'], [cmd]);
+                return true;
+            } catch (e) {
+                console.warn('executeEngineCommand failed:', e);
+                return false;
+            }
+        }
+        // Expose globally so trainer overlay can call it
+        window.executeEngineCommand = executeEngineCommand;
+
+        function startSelectedGame(fullscreen) {
+            if (isEngineLaunched || !loadedVfsMap) return;
+            isEngineLaunched = true;
+
+            const selectedMap = cfgMap.value;
+            const botCount    = cfgBots.value || '9';
+            const botDiff     = cfgDiff.value || '1';
+            const playerNick  = (cfgNick.value || 'Player').trim();
+            const touchLayout = window.matchMedia('(pointer: coarse), (any-pointer: coarse)').matches;
+            const resMode     = touchLayout ? 'fill' : (cfgRes.value || '1024x768');
+
+            let targetW, targetH;
+
+            // Apply display mode and resolution to canvas
+            if (fullscreen) {
+                targetW = window.screen.width || window.innerWidth || 1920;
+                targetH = window.screen.height || window.innerHeight || 1080;
+                canvas.className = 'mode-fullscreen';
+                canvas.width = targetW;
+                canvas.height = targetH;
+                canvas.style.width = '100vw';
+                canvas.style.height = '100dvh';
+
+                const vp = document.getElementById('viewport-container');
+                const req = vp.requestFullscreen || vp.webkitRequestFullscreen || vp.mozRequestFullScreen || vp.msRequestFullscreen;
+                if (req) {
+                    try {
+                        const p = req.call(vp);
+                        if (p && p.catch) p.catch(() => {});
+                    } catch {}
+                }
+            } else {
+                if (resMode === 'fill') {
+                    targetW = window.innerWidth;
+                    targetH = window.innerHeight;
+                    canvas.className = 'mode-fill';
+                    canvas.width = targetW;
+                    canvas.height = targetH;
+                    canvas.style.width = '100vw';
+                    canvas.style.height = '100dvh';
+
+                    const resizeCanvas = () => {
+                        if (canvas.classList.contains('mode-fill')) {
+                            canvas.width = Math.max(1, Math.round(window.innerWidth));
+                            canvas.height = Math.max(1, Math.round(window.innerHeight));
+                        }
+                    };
+                    window.addEventListener('resize', resizeCanvas);
+                    if (window.visualViewport) {
+                        window.visualViewport.addEventListener('resize', resizeCanvas);
+                    }
+                } else {
+                    const [w, h] = resMode.split('x').map(Number);
+                    targetW = w;
+                    targetH = h;
+                    canvas.className = 'mode-windowed';
+                    canvas.width = w;
+                    canvas.height = h;
+                    canvas.style.width = `${w}px`;
+                    canvas.style.height = `${h}px`;
+                }
+            }
+
+            // Dismiss launcher overlay
+            overlay.style.pointerEvents = 'none';
+            overlay.style.opacity = '0';
+            setTimeout(() => overlay.remove(), 400);
+
+            canvas.style.opacity = '1';
+            canvas.focus();
+            touchControls.classList.toggle('visible', touchLayout);
+
+            if (canvas.requestPointerLock && !touchLayout) {
+                canvas.addEventListener('click', () => {
+                    if (document.pointerLockElement !== canvas) {
+                        canvas.requestPointerLock();
+                    }
+                });
+            }
+
+            // CS 1.1 models differ from the CS16 DLL's forced-consistency set.
+            // Disable checks for this local game so the server does not kick its client.
+            const cmdArgs = [
+                fullscreen ? '-fullscreen' : '-windowed',
+                '-width', String(targetW),
+                '-height', String(targetH),
+                '-rodir', CONFIG.MOUNT_POINT,
+                '-game', CONFIG.GAME_NAME,
+                '+_vgui_menus', '0',
+                '+name', playerNick,
+                '+hostname', 'Counter-Strike 1.1 Web',
+                '+maxplayers', '32',
+                '+deathmatch', '1',
+                '+sv_lan', '1',
+                '+mp_consistency', '0',
+                // Do not spawn bots before the selected map has a matching nav file.
+                '+bot_quota', '0',
+                '+bot_difficulty', botDiff,
+                '+bot_join_after_player', '0',
+                '+bot_auto_vacate', '1',
+                '+mp_autoteambalance', '1',
+                '+mp_limitteams', '0',
+                '+gl_check_errors', '0',
+                '+developer', '0',
+                '+default_fov', '90',
+                '+fps_max', '60',
+                '+rate', '25000',
+                '+cl_updaterate', '60',
+                '+cl_cmdrate', '60'
+            ];
+
+            if (CONFIG.NET_DEDICATED_ADDR) {
+                cmdArgs.push('+connect', CONFIG.NET_DEDICATED_ADDR);
+            }
+
+            const gameConfig = {
+                selectedMap,
+                playerNick,
+                botCount,
+                botDiff
+            };
+
+            launchGameSession(loadedVfsMap, cmdArgs, gameConfig);
+        }
+
+        function launchGameSession(vfsMap, cmdArgs, gameConfig) {
+            // CS 1.1 backward-compatibility shim:
+            // CS 1.1 used sniper_scope.spr, but cs16-client requires 4 scope_arc*.tga files.
+            const ensureScopeArc = (path, quad) => {
+                if (!vfsMap.has(path)) {
+                    vfsMap.set(path, generateScopeArcTGA(quad));
+                }
+            };
+            ensureScopeArc('cstrike/sprites/scope_arc_nw.tga', 'nw');
+            ensureScopeArc('cstrike/sprites/scope_arc_ne.tga', 'ne');
+            ensureScopeArc('cstrike/sprites/scope_arc.tga',    'se');
+            ensureScopeArc('cstrike/sprites/scope_arc_sw.tga', 'sw');
+
+            // Patch player name in cstrike/config.cfg if present in VFS
+            if (vfsMap.has('cstrike/config.cfg')) {
+                try {
+                    const dec = new TextDecoder();
+                    let cfgText = dec.decode(vfsMap.get('cstrike/config.cfg'));
+                    cfgText = cfgText.replace(/name\s+"[^"]*"/g, `name "${gameConfig.playerNick}"`);
+                    const enc = new TextEncoder();
+                    vfsMap.set('cstrike/config.cfg', enc.encode(cfgText));
+                } catch (e) {
+                    console.warn('Could not patch cstrike/config.cfg:', e);
+                }
+            }
+
+            const gl = canvas.getContext('webgl2', {
+                alpha: false,
+                depth: true,
+                stencil: true,
+                antialias: false,
+                powerPreference: 'high-performance'
+            });
+
+            if (!gl) {
+                throw new Error('WebGL2 context unavailable. Verify GPU acceleration in browser settings.');
+            }
+
+            let engineModule = null;
+            let bootMapIssued = false;
+
+            const xashInstance = window.Xash3D({
+                arguments: cmdArgs,
+                canvas: canvas,
+                ctx: gl,
+                dynamicLibraries: DYNAMIC_LIBS,
+                print: function (text) {
+                    console.log('[Xash3D]', text);
+                },
+                printErr: function (text) {
+                    console.warn('[Xash3D Err]', text);
+                    if (typeof text === 'string' && text.includes('Host_Error:')) {
+                        fatal(new Error(text));
+                    }
+                },
+                onRuntimeInitialized: function () {
+                    engineModule = this;
+                    window.__engineMod = this; // expose to trainer
+                    const FS = this.FS;
+                    const createdDirs = new Set();
+
+                    for (const [relPath, uint8Data] of vfsMap) {
+                        const target = `${CONFIG.MOUNT_POINT}/${relPath}`;
+                        const parent = target.slice(0, target.lastIndexOf('/'));
+                        if (!createdDirs.has(parent)) {
+                            FS.mkdirTree(parent);
+                            createdDirs.add(parent);
+                        }
+                        FS.writeFile(target, uint8Data, { canOwn: true });
+                        vfsMap.delete(relPath);
+                    }
+
+                    const requiredMountedFiles = [
+                        `${CONFIG.MOUNT_POINT}/cstrike/models/shield/p_shield_deagle.mdl`,
+                        `${CONFIG.MOUNT_POINT}/valve/pak0.pak`
+                    ];
+                    for (const path of requiredMountedFiles) {
+                        const stat = FS.stat(path);
+                        if (!FS.isFile(stat.mode) || stat.size === 0) {
+                            throw new Error(`Required game asset was not mounted correctly: ${path}`);
+                        }
+                    }
+
+                    // Synthesize autoexec.cfg with user-chosen map, bots and configuration
+                    const autoexecLines = [
+                        '// Auto-generated CS 1.1 Web autoexec.cfg',
+                        'sv_lan 1',
+                        'maxplayers 32',
+                        'deathmatch 1',
+                        'mp_consistency 0',
+                        `name "${gameConfig.playerNick}"`,
+                        'bot_quota 0',
+                        `bot_difficulty ${gameConfig.botDiff}`,
+                        'bot_join_after_player 0',
+                        'bot_auto_vacate 1',
+                        'bot_chatter off',
+                        'mp_autoteambalance 1',
+                        'mp_limitteams 0',
+                        '_vgui_menus 0'
+                    ];
+
+                    const enc = new TextEncoder();
+                    const autoexecData = enc.encode(autoexecLines.join('\n') + '\n');
+
+                    // Write autoexec.cfg to both cstrike and valve roots, plus userconfig.cfg
+                    FS.writeFile(`${CONFIG.MOUNT_POINT}/cstrike/autoexec.cfg`, autoexecData);
+                    FS.writeFile(`${CONFIG.MOUNT_POINT}/valve/autoexec.cfg`, autoexecData);
+                    FS.writeFile(`${CONFIG.MOUNT_POINT}/cstrike/userconfig.cfg`, autoexecData);
+
+                    // Synthesize cstrike/valve.rc without a map command.
+                    // The one-shot JS boot callback launches the map after runtime startup.
+                    const valveRcLines = [
+                        '// CS 1.1 Boot Orchestrator',
+                        's_refgain 0.4',
+                        's_refdelay 4',
+                        's_occfactor 0.25',
+                        's_verbwet 0.25',
+                        's_distance 60',
+                        'exec language.cfg',
+                        'exec joystick.cfg',
+                        'exec autoexec.cfg',
+                        'stuffcmds'
+                    ];
+                    const valveRcData = enc.encode(valveRcLines.join('\n') + '\n');
+                    FS.writeFile(`${CONFIG.MOUNT_POINT}/cstrike/valve.rc`, valveRcData);
+
+                    FS.chdir(CONFIG.MOUNT_POINT);
+
+                    if (gameConfig.selectedMap && gameConfig.selectedMap !== '_menu') {
+                        if (!/^[a-z0-9_]+$/i.test(gameConfig.selectedMap)) {
+                            throw new Error(`Invalid map name: ${gameConfig.selectedMap}`);
+                        }
+
+                        const mapName = gameConfig.selectedMap;
+                        const navDirectory = `${CONFIG.WRITE_MOUNT_POINT}/${CONFIG.GAME_NAME}/maps`;
+                        const navPath = `${navDirectory}/${mapName}.nav`;
+                        const navCacheKey = `${ASSET_REVISION}:${ENGINE_VER}:${CLIENT_VER}:${mapName}`;
+                        try {
+                            FS.mkdirTree(navDirectory);
+                        } catch (error) {
+                            throw new Error(`Could not create writable bot navigation directory ${navDirectory}: ${error.message}`);
+                        }
+
+                        const scheduleBots = () => {
+                            const botCount = Number.parseInt(gameConfig.botCount, 10);
+                            if (!Number.isFinite(botCount) || botCount <= 0) return;
+
+                            // Add bots explicitly after the map is live. A quota set during
+                            // startup can be ignored while the server is waiting for its
+                            // first player, even with bot_join_after_player disabled.
+                            executeEngineCommand(engineModule, 'bot_join_after_player 0');
+                            executeEngineCommand(engineModule, 'bot_auto_vacate 1');
+                            for (let index = 0; index < botCount; index += 1) {
+                                window.setTimeout(() => {
+                                    // Assign each bot a real playable team explicitly so
+                                    // team rosters and their CT/T counts update reliably.
+                                    const teamCommand = index % 2 === 0 ? 'bot_add_t' : 'bot_add_ct';
+                                    if (!executeEngineCommand(engineModule, teamCommand)) {
+                                        console.warn(`[Bots] Could not add bot ${index + 1}/${botCount} on ${mapName}.`);
+                                    }
+                                }, 1000 + index * 350);
+                            }
+                        };
+
+                        const issueBootMap = () => window.setTimeout(() => {
+                            if (bootMapIssued) return;
+                            bootMapIssued = true;
+                            if (!engineModule || !executeEngineCommand(engineModule, `map ${mapName}`)) {
+                                fatal(new Error(`Could not start map ${mapName}.`));
+                                return;
+                            }
+
+                            if (gameConfig.botCount === '0') return;
+
+                            if (FS.analyzePath(navPath).exists) {
+                                // The matching map navigation is already present or was restored from cache.
+                                scheduleBots();
+                                return;
+                            }
+
+                            executeEngineCommand(engineModule, 'bot_quota 0');
+                            void askToAnalyzeNavigation(mapName).then((accepted) => {
+                                if (!accepted || !engineModule) return;
+                                if (!executeEngineCommand(engineModule, 'bot_nav_analyze')) {
+                                    console.warn(`[Bot nav] Could not analyze ${mapName}.`);
+                                    return;
+                                }
+                                scheduleBots();
+                            });
+                        }, CONFIG.BOOT_MAP_DELAY_MS);
+
+                        const prepareNavigation = async () => {
+                            if (gameConfig.botCount === '0') {
+                                issueBootMap();
+                                return;
+                            }
+
+                            let db;
+                            try {
+                                db = await openNavigationCache();
+                                const cached = await readNavigationCache(db, navCacheKey);
+                                if (cached && !FS.analyzePath(navPath).exists) {
+                                    FS.writeFile(navPath, cached);
+                                    console.info(`[Bot nav] Restored cached navigation for ${mapName}.`);
+                                }
+                            } catch (error) {
+                                console.warn(`[Bot nav] Persistent navigation cache unavailable for ${mapName}:`, error);
+                            } finally {
+                                if (db) db.close();
+                            }
+                            issueBootMap();
+                        };
+
+                        void prepareNavigation();
+                    }
+                },
+                locateFile: (requested) => WASM_LOOKUP[requested] || requested,
+                onAbort: (msg) => fatal(new Error(`GoldSrc WASM core aborted: ${msg}`))
+            });
+
+            if (xashInstance && typeof xashInstance.then === 'function') {
+                xashInstance.then((mod) => {
+                    engineModule = mod;
+                    window.__engineMod = mod; // trainer pickup
+                }).catch(fatal);
+            }
+
+            // The selected map is submitted once after runtime initialization; it is not replayed by stuffcmds.
+        }
+
+        async function init() {
+            if (typeof WebAssembly !== 'object') {
+                throw new Error('Current browser does not support WebAssembly.');
+            }
+
+            canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            setStatus('Checking engine runtime dependencies...');
+            await preflightBinaries([RAW_JS_URL, ...new Set(Object.values(WASM_LOOKUP))]);
+
+            setStatus('Loading JSZip and GoldSrc runtime bridge...');
+            await Promise.all([loadScript(JSZIP_URL), loadScript(RAW_JS_URL)]);
+
+            if (typeof window.JSZip !== 'function') throw new Error('JSZip library failed to initialize.');
+            if (typeof window.Xash3D !== 'function') throw new Error('Xash3D engine runtime constructor not found.');
+
+            btnFullscreen.addEventListener('click', () => startSelectedGame(true));
+            btnWindowed.addEventListener('click', () => startSelectedGame(false));
+
+            skinImportButton.addEventListener('click', () => skinFileInput.click());
+            skinFileInput.addEventListener('change', async (event) => {
+                const file = event.target.files && event.target.files[0];
+                if (!file) return;
+                if (!loadedVfsMap) {
+                    skinImportStatus.textContent = 'Wait until game files finish loading, then import the mod.';
+                    return;
+                }
+                skinImportButton.disabled = true;
+                skinImportStatus.textContent = `Importing ${file.name}...`;
+                try {
+                    const importedFiles = await extractSkinMod(file);
+                    for (const [path, data] of importedFiles) loadedVfsMap.set(path, data);
+                    let persistenceFailed = false;
+                    try {
+                        await saveSkinMods(importedFiles);
+                    } catch (error) {
+                        persistenceFailed = true;
+                        console.warn('[Skin mod] Could not persist imported files:', error);
+                    }
+                    skinImportStatus.textContent = `Imported ${importedFiles.size} files. ${persistenceFailed ? 'They apply this session only; browser storage is unavailable.' : 'They will load on future launches too.'}`;
+                } catch (error) {
+                    console.warn('[Skin mod] Import failed:', error);
+                    skinImportStatus.textContent = error.message || 'Could not import this skin mod.';
+                } finally {
+                    skinImportButton.disabled = false;
+                    skinFileInput.value = '';
+                }
+            });
+
+            const onVfsReady = async (vfs) => {
+                try {
+                    const savedSkinFiles = await readSavedSkinMods();
+                    for (const [path, data] of savedSkinFiles) vfs.set(path, data);
+                    if (savedSkinFiles.size) {
+                        skinImportStatus.textContent = `Loaded ${savedSkinFiles.size} saved skin files. Import another ZIP to override them.`;
+                    }
+                } catch (error) {
+                    console.warn('[Skin mod] Could not load saved skin mods:', error);
+                    skinImportStatus.textContent = 'Skin mod storage is unavailable; imports will not persist after reload.';
+                }
+                validateGameAssets(vfs);
+                loadedVfsMap = vfs;
+                skinImportPanel.style.display = 'block';
+                setProgress(100);
+                setStatus('Game files ready.\nChoose your map, mode and bot settings, then click Launch:');
+                actions.style.display = 'flex';
+                btnFullscreen.focus();
+            };
+
+            // ----------------------------------------------------------------
+            // Split-fetch strategy:
+            //   assets.zip  — loose cstrike + valve files (no pak0.pak) ~149MB
+            //   pak0.pak    — raw valve pak, fetched in parallel            ~111MB
+            // Both fetches happen simultaneously; combined progress is shown.
+            // Falls back to legacy valve.zip if split files are absent.
+            // ----------------------------------------------------------------
+            let zipBuffer = null;
+            let pak0Buffer = null;
+
+            const splitAvailable = await (async () => {
+                try {
+                    const [za, zp] = await Promise.all([
+                        fetch(CONFIG.ASSETS_ZIP_URL, { method: 'HEAD' }),
+                        fetch(CONFIG.PAK0_URL,       { method: 'HEAD' })
+                    ]);
+                    return za.ok && zp.ok;
+                } catch { return false; }
+            })();
+
+            if (splitAvailable) {
+                // Track per-source progress
+                let zipLoaded = 0, zipTotal = 0;
+                let pak0Loaded = 0, pak0Total = 0;
+
+                const updateProgress = () => {
+                    const total = zipTotal + pak0Total;
+                    const loaded = zipLoaded + pak0Loaded;
+                    if (total > 0) {
+                        setProgress((loaded / total) * 95);
+                        setStatus(
+                            `Streaming assets: ${(loaded / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB` +
+                            `\n  assets.zip: ${(zipLoaded / 1048576).toFixed(1)} MB` +
+                            `  |  pak0.pak: ${(pak0Loaded / 1048576).toFixed(1)} MB`
+                        );
+                    }
+                };
+
+                const fetchStream = async (url, onProgress) => {
+                    const res = await fetch(url, { cache: 'no-store' });
+                    if (!res.ok) throw new Error(`${res.status} ${url}`);
+                    const len = Number(res.headers.get('Content-Length')) || 0;
+                    onProgress(0, len);
+                    if (!res.body || !res.body.getReader) return res.arrayBuffer();
+                    const reader = res.body.getReader();
+                    const chunks = [];
+                    let loaded = 0;
+                    for (;;) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                        loaded += value.length;
+                        onProgress(loaded, len || loaded);
+                    }
+                    const buf = new Uint8Array(loaded);
+                    let off = 0;
+                    for (const c of chunks) { buf.set(c, off); off += c.length; }
+                    return buf.buffer;
+                };
+
+                [zipBuffer, pak0Buffer] = await Promise.all([
+                    fetchStream(CONFIG.ASSETS_ZIP_URL, (loaded, total) => {
+                        zipLoaded = loaded; zipTotal = total; updateProgress();
+                    }),
+                    fetchStream(CONFIG.PAK0_URL, (loaded, total) => {
+                        pak0Loaded = loaded; pak0Total = total; updateProgress();
+                    })
+                ]);
+
+                setStatus('Decompressing assets.zip...');
+                setProgress(95);
+                const vfs = await unpackAssets(zipBuffer);
+
+                // Inject pak0.pak directly into VFS as a raw blob — engine reads it as a PAK
+                setStatus('Mounting pak0.pak...');
+                vfs.set('valve/pak0.pak', new Uint8Array(pak0Buffer));
+
+                await onVfsReady(vfs);
+
+            } else {
+                // Legacy path: single valve.zip
+                setStatus(`Streaming ${CONFIG.ASSET_ZIP_URL}...`);
+                let buffer = null;
+                try {
+                    buffer = await fetchZipBuffer(CONFIG.ASSET_ZIP_URL);
+                } catch (err) {
+                    console.warn('Auto-fetch of valve.zip skipped/failed:', err);
+                    setStatus('Notice: valve.zip not found on local web server.\nDrag & drop or select your valve.zip below:');
+                    dropZone.style.display = 'block';
+
+                    const handleSelectedFile = async (file) => {
+                        if (!file || !file.name.toLowerCase().endsWith('.zip')) {
+                            setStatus('Error: Selected file is not a .zip archive.');
+                            return;
+                        }
+                        dropZone.style.display = 'none';
+                        setStatus(`Reading ${file.name} (${(file.size / 1048576).toFixed(1)} MB)...`);
+                        const reader = new FileReader();
+                        reader.onload = async () => {
+                            try {
+                                const vfs = await unpackAssets(reader.result);
+                                await onVfsReady(vfs);
+                            } catch (e) {
+                                fatal(e);
+                            }
+                        };
+                        reader.onerror = () => fatal(new Error('Failed to read file from disk.'));
+                        reader.readAsArrayBuffer(file);
+                    };
+
+                    btnBrowse.addEventListener('click', () => fileInput.click());
+                    fileInput.addEventListener('change', (e) => {
+                        if (e.target.files && e.target.files[0]) handleSelectedFile(e.target.files[0]);
+                    });
+
+                    dropZone.addEventListener('dragover', (e) => {
+                        e.preventDefault();
+                        dropZone.classList.add('dragover');
+                    });
+                    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+                    dropZone.addEventListener('drop', (e) => {
+                        e.preventDefault();
+                        dropZone.classList.remove('dragover');
+                        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                            handleSelectedFile(e.dataTransfer.files[0]);
+                        }
+                    });
+                    return;
+                }
+
+                const vfs = await unpackAssets(buffer);
+                await onVfsReady(vfs);
+            }
+        }
+
+        // ================================================================
+        // Trainer (cheat console) logic
+        // ================================================================
+        (function initTrainer() {
+            const trPanel    = document.getElementById('trainer');
+            const trHint     = document.getElementById('trainer-hint');
+            const trStatus   = document.getElementById('tr-status');
+            const trDrag     = document.getElementById('tr-drag');
+
+            let trainerOpen  = false;
+            const toggleState = {}; // tracks on/off per cheat id
+
+            // Show hint badge once engine is active
+            const hintObserver = new MutationObserver(() => {
+                if (!document.getElementById('overlay')) {
+                    trHint.classList.add('visible');
+                    hintObserver.disconnect();
+                }
+            });
+            hintObserver.observe(document.body, { childList: true, subtree: true });
+
+            function trLog(msg, isErr) {
+                trStatus.textContent = msg;
+                trStatus.className = 'tr-status' + (isErr ? ' err' : '');
+            }
+
+            function sendCmd(cmd) {
+                if (typeof executeEngineCommand === 'function' && window.__engineMod) {
+                    const ok = executeEngineCommand(window.__engineMod, cmd);
+                    if (!ok) {
+                        trLog('Engine not ready yet — try again', true);
+                        return false;
+                    }
+                    trLog('> ' + cmd);
+                    return true;
+                }
+                trLog('Engine module not available yet', true);
+                return false;
+            }
+
+            function ensureCheats() {
+                return sendCmd('sv_cheats 1');
+            }
+
+            // Toggle open/close
+            function toggleTrainer() {
+                trainerOpen = !trainerOpen;
+                trPanel.classList.toggle('open', trainerOpen);
+                if (trainerOpen) {
+                    // Release pointer lock so mouse can interact with trainer
+                    if (document.exitPointerLock) document.exitPointerLock();
+                } else {
+                    // Re-lock when closing
+                    const c = document.getElementById('canvas');
+                    const touchLayout = window.matchMedia('(pointer: coarse), (any-pointer: coarse)').matches;
+                    if (c && c.requestPointerLock && !touchLayout) {
+                        setTimeout(() => c.requestPointerLock(), 100);
+                    }
+                }
+            }
+
+            document.getElementById('touch-trainer').addEventListener('click', () => {
+                if (!document.getElementById('overlay') || !document.getElementById('overlay').isConnected) {
+                    toggleTrainer();
+                }
+            });
+
+            // F1 toggles trainer on any keyboard context
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'F1') {
+                    e.preventDefault();
+                    // Only show trainer after engine has started (overlay gone)
+                    if (!document.getElementById('overlay') || !document.getElementById('overlay').isConnected) {
+                        toggleTrainer();
+                    }
+                }
+                // Escape closes trainer
+                if (e.key === 'Escape' && trainerOpen) {
+                    toggleTrainer();
+                }
+            });
+
+            // Click handlers for buttons
+            trPanel.addEventListener('click', (e) => {
+                const btn = e.target.closest('.tr-btn');
+                if (!btn) return;
+
+                if (btn.dataset.action === 'return-launcher') {
+                    if (document.exitPointerLock && document.pointerLockElement) document.exitPointerLock();
+                    if (document.fullscreenElement && document.exitFullscreen) {
+                        document.exitFullscreen().catch(() => {});
+                    }
+                    window.location.reload();
+                    return;
+                }
+
+                if (!ensureCheats()) return;
+
+                const cheatId = btn.dataset.cheat;
+                const cmdOnce = btn.dataset.cmd;
+                const toggle  = btn.dataset.toggle; // "cmdOn;cmdOff"
+
+                if (cmdOnce) {
+                    if (!sendCmd(cmdOnce)) return;
+                    // Flash the button
+                    btn.classList.add('active');
+                    setTimeout(() => btn.classList.remove('active'), 400);
+                } else if (toggle) {
+                    const [cmdOn, cmdOff] = toggle.split(';');
+                    const isOn = toggleState[cheatId];
+                    if (!sendCmd(isOn ? cmdOff : cmdOn)) return;
+                    toggleState[cheatId] = !isOn;
+                    btn.classList.toggle('active', !isOn);
+                }
+            });
+
+            // Slider: speed
+            const slSpeed = document.getElementById('sl-speed');
+            const svSpeed = document.getElementById('sv-speed');
+            slSpeed.addEventListener('input', () => {
+                svSpeed.textContent = slSpeed.value;
+            });
+            slSpeed.addEventListener('change', () => {
+                if (!ensureCheats()) return;
+                sendCmd(`sv_maxspeed ${slSpeed.value}`);
+                sendCmd(`cl_forwardspeed ${slSpeed.value}`);
+                sendCmd(`cl_backspeed ${slSpeed.value}`);
+            });
+
+            // Slider: gravity
+            const slGrav = document.getElementById('sl-grav');
+            const svGrav = document.getElementById('sv-grav');
+            slGrav.addEventListener('input', () => {
+                svGrav.textContent = slGrav.value;
+            });
+            slGrav.addEventListener('change', () => {
+                if (!ensureCheats()) return;
+                sendCmd(`sv_gravity ${slGrav.value}`);
+            });
+
+            // Drag to reposition panel
+            let dragX = 0, dragY = 0, dragging = false;
+            trDrag.addEventListener('mousedown', (e) => {
+                dragging = true;
+                const rect = trPanel.getBoundingClientRect();
+                dragX = e.clientX - rect.left;
+                dragY = e.clientY - rect.top;
+                e.preventDefault();
+            });
+            document.addEventListener('mousemove', (e) => {
+                if (!dragging) return;
+                const nx = e.clientX - dragX;
+                const ny = e.clientY - dragY;
+                trPanel.style.right  = 'auto';
+                trPanel.style.left   = `${Math.max(0, Math.min(nx, window.innerWidth - trPanel.offsetWidth))}px`;
+                trPanel.style.top    = `${Math.max(0, Math.min(ny, window.innerHeight - 40))}px`;
+            });
+            document.addEventListener('mouseup', () => { dragging = false; });
+        })();
+
+        (function initTouchControls() {
+            const touchStatus = document.getElementById('touch-status');
+            const activeCommands = new Set();
+
+            function sendCommand(command) {
+                if (!executeEngineCommand(window.__engineMod, command)) {
+                    touchStatus.textContent = 'Touch input unavailable until the game is ready.';
+                    return false;
+                }
+                touchStatus.textContent = '';
+                return true;
+            }
+
+            function holdCommand(command) {
+                if (activeCommands.has(command)) return true;
+                if (!sendCommand(`+${command}`)) return false;
+                activeCommands.add(command);
+                return true;
+            }
+
+            function releaseCommand(command) {
+                if (!activeCommands.has(command)) return;
+                activeCommands.delete(command);
+                sendCommand(`-${command}`);
+            }
+
+            function releaseAll() {
+                for (const command of Array.from(activeCommands)) releaseCommand(command);
+            }
+
+            document.querySelectorAll('[data-touch-hold]').forEach((button) => {
+                const command = button.dataset.touchHold;
+                button.addEventListener('pointerdown', (event) => {
+                    event.preventDefault();
+                    try {
+                        button.setPointerCapture(event.pointerId);
+                    } catch {}
+                    holdCommand(command);
+                });
+                const release = (event) => {
+                    event.preventDefault();
+                    releaseCommand(command);
+                };
+                button.addEventListener('pointerup', release);
+                button.addEventListener('pointercancel', release);
+                button.addEventListener('lostpointercapture', release);
+                button.addEventListener('contextmenu', (event) => event.preventDefault());
+            });
+
+            document.querySelectorAll('[data-touch-command]').forEach((button) => {
+                button.addEventListener('click', () => sendCommand(button.dataset.touchCommand));
+            });
+
+            function bindStick(elementId, directions) {
+                const stick = document.getElementById(elementId);
+                const knob = stick.querySelector('.touch-stick-knob');
+                let pointerId = null;
+                let centerX = 0;
+                let centerY = 0;
+                let radius = 1;
+                let pressed = new Set();
+
+                function update(event) {
+                    const maxOffset = radius * 0.76;
+                    let dx = event.clientX - centerX;
+                    let dy = event.clientY - centerY;
+                    const distance = Math.hypot(dx, dy);
+                    if (distance > maxOffset) {
+                        dx = dx * maxOffset / distance;
+                        dy = dy * maxOffset / distance;
+                    }
+                    knob.style.left = `calc(50% + ${dx}px)`;
+                    knob.style.top = `calc(50% + ${dy}px)`;
+
+                    const next = new Set();
+                    if (Math.abs(dx) > radius * 0.24) next.add(dx < 0 ? directions.left : directions.right);
+                    if (Math.abs(dy) > radius * 0.24) next.add(dy < 0 ? directions.up : directions.down);
+                    for (const command of pressed) {
+                        if (!next.has(command)) releaseCommand(command);
+                    }
+                    for (const command of next) {
+                        if (!pressed.has(command) && !holdCommand(command)) next.delete(command);
+                    }
+                    pressed = next;
+                }
+
+                function stop(event) {
+                    if (pointerId === null || (event && event.pointerId !== pointerId)) return;
+                    if (event) event.preventDefault();
+                    for (const command of pressed) releaseCommand(command);
+                    pressed.clear();
+                    pointerId = null;
+                    knob.style.left = '50%';
+                    knob.style.top = '50%';
+                }
+
+                stick.addEventListener('pointerdown', (event) => {
+                    if (pointerId !== null) return;
+                    event.preventDefault();
+                    pointerId = event.pointerId;
+                    const rect = stick.getBoundingClientRect();
+                    centerX = rect.left + rect.width / 2;
+                    centerY = rect.top + rect.height / 2;
+                    radius = Math.max(1, Math.min(rect.width, rect.height) / 2);
+                    try {
+                        stick.setPointerCapture(event.pointerId);
+                    } catch {}
+                    update(event);
+                });
+                stick.addEventListener('pointermove', (event) => {
+                    if (event.pointerId !== pointerId) return;
+                    event.preventDefault();
+                    update(event);
+                });
+                stick.addEventListener('pointerup', stop);
+                stick.addEventListener('pointercancel', stop);
+                stick.addEventListener('lostpointercapture', stop);
+            }
+
+            bindStick('move-stick', {
+                left: 'moveleft',
+                right: 'moveright',
+                up: 'forward',
+                down: 'back'
+            });
+            bindStick('look-stick', {
+                left: 'left',
+                right: 'right',
+                up: 'lookup',
+                down: 'lookdown'
+            });
+
+            window.addEventListener('blur', releaseAll);
+            window.addEventListener('pagehide', releaseAll);
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) releaseAll();
+            });
+        })();
+
+        init().catch(fatal);
+    })();
+    </script>
+</body>
+</html>
