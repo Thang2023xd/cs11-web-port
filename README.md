@@ -8,6 +8,17 @@ Serve this folder from a local web server (for example, `python -m http.server 8
 
 The game installation and generated asset archives are intentionally excluded from Git. When the launcher asks for game data, select a locally owned `valve.zip`. The launcher can also load `assets.zip` and `pak0.pak` when those files are present beside `index.html` locally.
 
+## Create `valve.zip`
+
+Install Python 3, then download `makezip.py` and `split_assets.py` from this repository. Open PowerShell in the folder where you saved the scripts. The game folder you pass must contain `valve/` and `cstrike/` directly. Run the scripts **in order** because the second one reads the ZIP created by the first:
+
+```powershell
+py .\makezip.py "D:\Games\Counter-Strike 1.1"
+py .\split_assets.py .\valve.zip
+```
+
+Replace `D:\Games\Counter-Strike 1.1` with the actual game folder. The first command creates `valve.zip` beside the scripts; the second creates `assets.zip` and `pak0.pak` beside that ZIP. If Python's `py` launcher is unavailable, use `python` in both commands instead. If the scripts are placed inside the game folder itself, run `py .\makezip.py` without the game-folder argument, then `py .\split_assets.py`.
+
 ## Publish the launcher with GitHub Pages
 
 Push this repository to GitHub, then open **Settings → Pages** and choose **GitHub Actions** as the build and deployment source. The workflow deploys `index.html` on each push to `main`.
